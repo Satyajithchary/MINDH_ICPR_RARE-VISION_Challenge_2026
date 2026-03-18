@@ -237,18 +237,7 @@ The Galar dataset exhibits extreme imbalance (up to 1:3,000 positive-to-negative
 
 ## Citation
 
-If you use this work, please cite:
-
-```bibtex
-@misc{rarevision2026_diffbiomedclip,
-  title={Differential Attention-Augmented BiomedCLIP for Imbalanced Multi-Label VCE Classification},
-  author={Satyajith},
-  year={2026},
-  note={ICPR 2026 RARE-VISION Competition Submission}
-}
-```
-
-Please also cite the competition and dataset:
+If you use this work, please cite the competition and dataset:
 ```bibtex
 @article{Lawniczak2025,
   author={Lawniczak, Anni and Dhir, Manas and Le Floch, Maxime and Handa, Palak and Koulaouzidis, Anastasios},
