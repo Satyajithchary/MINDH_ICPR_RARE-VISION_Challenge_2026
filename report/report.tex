@@ -1,0 +1,218 @@
+\documentclass[12pt]{article}
+
+\usepackage{amssymb,amsmath,amsfonts,latexsym,graphicx}
+\usepackage[numbers]{natbib}
+\usepackage{hyperref} 
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\hypersetup{
+    colorlinks=true,
+    urlcolor=blue,
+    citecolor=black,
+    linkcolor=black,
+    pdftitle={Differential BiomedCLIP for VCE Classification},
+    pdfpagemode=FullScreen,
+}
+
+\setlength{\oddsidemargin}{0.5cm}
+\setlength{\textwidth}{17cm}
+\setlength{\topmargin}{-1.5cm}
+\setlength{\textheight}{22cm}   			
+
+\pagestyle{empty}
+
+\begin{document}
+
+\begin{center}
+\Large \bf Differential Attention-Augmented BiomedCLIP with Asymmetric Focal Optimization for Imbalanced Multi-Label Video Capsule Endoscopy Classification \rm
+
+\vspace{1cm}
+
+\large Satyajith$\,^a$
+
+\vspace{0.5cm}
+
+\normalsize
+
+$^a$ Independent Researcher
+
+\vspace{5mm}
+
+Corresponding Author Email: {\tt \href{mailto:---}{---}} 
+
+Team Name: {\tt ---}
+
+GitHub Repository Link: {\tt \href{---}{---}}
+
+\vspace{1cm}
+
+\end{center}
+
+\abstract{
+In this work, we present a multi-label classification framework for video capsule endoscopy (VCE) that addresses the extreme class imbalance inherent in the Galar dataset \cite{LeFloch2025galar} through a combination of architectural and optimization-level strategies. Our approach modifies BiomedCLIP \cite{Zhang2023biomedclip}, a biomedical vision-language foundation model, by replacing its standard multi-head self-attention with a differential attention mechanism \cite{Ye2024difftransformer} that computes the difference between two softmax attention maps to suppress attention noise. To counteract the skewed label distribution—where pathological findings constitute less than 0.1\% of all annotated frames—we employ a sqrt-frequency weighted sampler, asymmetric focal loss \cite{Ridnik2021asl}, mixup regularization \cite{Zhang2018mixup}, and per-class threshold optimization. Temporal coherence is enforced through median-filter smoothing and gap merging prior to event-level JSON generation. On the held-out RARE-VISION test set comprising three NaviCam examinations (161,025 frames), the pipeline achieves an overall temporal mAP@0.5 of 0.2456 and mAP@0.95 of 0.2353, with total inference completed in approximately 8.6 minutes on a single GPU.
+}
+
+
+\section{Motivation}\label{sec1}
+
+Gastrointestinal (GI) disorders represent a significant global health burden, with conditions ranging from inflammatory bowel disease to gastrointestinal bleeding affecting millions of individuals annually. Video capsule endoscopy (VCE) offers a non-invasive means of visualizing the entire GI tract, particularly the small intestine, which remains inaccessible to conventional endoscopic techniques \cite{Lawniczak2025}. A single VCE examination, however, generates on the order of 50,000--130,000 image frames, requiring gastroenterologists to review extensive video data to identify clinically relevant findings that may appear in only a handful of frames. This manual review is both time-intensive and prone to observer fatigue.
+
+The Galar dataset \cite{LeFloch2025galar} exemplifies the statistical challenge: anatomical regions (namely stomach, small intestine, colon) dominate the frame distribution, whereas pathological findings—namely active bleeding, angiectasia, erosion, and ulcer—are exceedingly sparse. In our training partition of 60 videos ($\sim$494,696 sampled frames), labels such as \textit{z-line} (3 positive frames), \textit{mouth} (73 frames), and \textit{active bleeding} (150 frames) exhibit positive-to-negative ratios exceeding 1:3,000. Standard cross-entropy optimization under this distribution leads to models that achieve high frame-level accuracy by trivially predicting the majority class while failing to detect clinically significant rare events. This phenomenon is well-documented in the medical imaging literature, where minority-class recall collapses despite ostensibly high aggregate performance.
+
+Our motivation is twofold: firstly, to investigate whether differential attention—a mechanism that explicitly cancels attention noise through subtraction of dual softmax maps—can yield more discriminative visual representations for subtle mucosal pathologies; and secondly, to develop a class-imbalance strategy that operates at multiple levels of the pipeline (namely sampling, loss weighting, augmentation, and post-processing threshold calibration) to ensure that rare pathological events receive adequate gradient signal during optimization.
+
+
+\section{Methods}\label{sec2}
+
+The proposed pipeline comprises four stages: (1)~an imbalanced data pipeline with class-aware sampling and augmentation, (2)~a differential multi-task architecture combining vision-language contrastive learning with supervised classification, (3)~a composite optimization objective, and (4)~temporal post-processing for event-level prediction. The architectural overview is illustrated in Figure~\ref{fig:pipeline}.
+
+\subsection{Backbone: Differential BiomedCLIP}
+
+We adopt BiomedCLIP \cite{Zhang2023biomedclip} as the foundation model, which comprises a Vision Transformer (ViT-B/16) image encoder pretrained alongside a PubMedBERT \cite{Gu2022pubmedbert} text encoder on 15 million biomedical image-text pairs extracted from PubMed Central. This pretraining regime endows the visual encoder with domain-specific representations for histopathological, radiological, and endoscopic imagery.
+
+To enhance the model's capacity for distinguishing subtle pathological features from visually similar healthy mucosa, we replace the standard multi-head self-attention in all 12 transformer blocks with differential attention \cite{Ye2024difftransformer}. Concretely, for a given input $\mathbf{X} \in \mathbb{R}^{N \times d}$, the $h$ attention heads are partitioned into two groups of $h/2$ heads each, yielding query-key pairs $(\mathbf{Q}_1, \mathbf{K}_1)$ and $(\mathbf{Q}_2, \mathbf{K}_2)$. The attention output is computed as:
+\begin{equation}
+    \text{DiffAttn}(\mathbf{X}) = \left(\text{softmax}\left(\frac{\mathbf{Q}_1\mathbf{K}_1^\top}{\sqrt{d_h}}\right) - \lambda \cdot \text{softmax}\left(\frac{\mathbf{Q}_2\mathbf{K}_2^\top}{\sqrt{d_h}}\right)\right)\mathbf{V}
+\end{equation}
+where $\lambda = \text{mean}(\exp(\boldsymbol{\lambda}_{q_1}^\top \boldsymbol{\lambda}_{k_1}) - \exp(\boldsymbol{\lambda}_{q_2}^\top \boldsymbol{\lambda}_{k_2}) + \lambda_{\text{init}})$ is a learnable scalar initialized at $\lambda_{\text{init}} = 0.8$, and $d_h$ denotes the per-head dimension. By subtracting the second attention distribution from the first, differential attention cancels common-mode noise patterns—namely uniform or low-rank attention maps that arise when query-key similarity is uninformative—thereby amplifying signal from rare but diagnostically meaningful spatial regions.
+
+Critically, pretrained weights from BiomedCLIP are fully transferred to the differential blocks. The fused QKV projection $\mathbf{W}_{qkv} \in \mathbb{R}^{3d \times d}$ is decomposed into separate $\mathbf{W}_q$, $\mathbf{W}_k$, $\mathbf{W}_v$ projections, while MLP and LayerNorm parameters are copied directly. This preserves the biomedical visual knowledge acquired during pretraining while introducing the differential attention parameterization.
+
+\subsection{Classification Architecture}
+
+The 512-dimensional image features from the ViT encoder are processed through two parallel pathways:
+
+\textbf{Classification path.} Image features pass through an Excitation Block inspired by Squeeze-and-Excitation Networks \cite{Hu2018senet}, which applies a channel-wise gating mechanism with reduction ratio $r=16$:
+\begin{equation}
+    \mathbf{x}_{\text{out}} = \text{BN}\left(\mathbf{x} \odot \sigma\left(\mathbf{W}_2 \cdot \text{ReLU}\left(\mathbf{W}_1 \mathbf{x}\right)\right)\right)
+\end{equation}
+where $\mathbf{W}_1 \in \mathbb{R}^{(d/r) \times d}$, $\mathbf{W}_2 \in \mathbb{R}^{d \times (d/r)}$, $\sigma$ denotes the sigmoid function, and BN is batch normalization. The gated features are then projected to 17 class logits through a linear layer preceded by dropout ($p=0.4$).
+
+\textbf{Contrastive path.} Normalized image features are matched against frozen text embeddings generated by the PubMedBERT text encoder from clinical prompts of the form \textit{``a video capsule endoscopy image showing [label]''}. Contrastive logits are computed as $\mathbf{z}_{\text{con}} = (\mathbf{x} / \|\mathbf{x}\|) \cdot \mathbf{T}^\top \cdot \exp(\tau)$, where $\mathbf{T}$ contains the 17 text embeddings and $\tau$ is a learnable temperature parameter clamped to $\exp(\tau) \leq 100$ for numerical stability.
+
+\subsection{How was class imbalance handled?}
+
+Class imbalance was addressed through a coordinated multi-level strategy: (i)~a sqrt-frequency weighted random sampler that assigns each frame a sampling weight proportional to $1/\sqrt{f_c}$ where $f_c$ is the frequency of its rarest active label, providing moderate oversampling of rare classes without the instability of linear inverse weighting; (ii)~asymmetric focal loss \cite{Ridnik2021asl} with $\gamma_+ = 1$, $\gamma_- = 4$ that aggressively down-weights easy negative predictions—which dominate in imbalanced settings—while preserving gradient flow for positive examples; and (iii)~per-class threshold optimization on the validation set, searching from 0.05 for rare classes (support $< 1\%$ of the dataset) to maximize class-specific F1 scores.
+
+\subsection{Regularization}
+
+To mitigate overfitting on the training distribution—a concern given the high ratio of common to rare frames—we apply several regularization mechanisms. Mixup \cite{Zhang2018mixup} with $\alpha = 0.3$ linearly interpolates pairs of training images and their multi-label targets, which acts as a data-dependent regularizer encouraging smoother decision boundaries. Label smoothing \cite{Szegedy2016labelsmoothing} with $\epsilon = 0.05$ prevents overconfident predictions by softening hard binary targets to $[0.05, 0.95]$. Exponential moving average (EMA) of model parameters with decay $\beta = 0.999$ provides an ensembling effect over training iterations, and the EMA weights are used for all validation and test inference. Additionally, strong augmentation comprising random resized cropping (scale 0.7--1.0), color jitter, horizontal and vertical flips, random rotation ($\pm 15^{\circ}$), and random erasing is applied during training.
+
+\subsection{Optimization}
+
+The model is optimized with AdamW ($\beta_1=0.9$, $\beta_2=0.999$) and a weight decay of $5\times10^{-4}$, using a OneCycleLR schedule with maximum learning rates of $9\times10^{-5}$ for the backbone and $3\times10^{-4}$ for the classification head. The total loss is:
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_{\text{cls}} + 0.4 \cdot \mathcal{L}_{\text{con}}
+\end{equation}
+where $\mathcal{L}_{\text{cls}}$ is the asymmetric focal loss with class-frequency-derived positive weights (clipped to $[1, 100]$), and $\mathcal{L}_{\text{con}}$ is the binary cross-entropy computed on contrastive logits with the same positive weights. Training is conducted for 5 epochs on a single NVIDIA RTX PRO 6000 GPU (102~GB VRAM) with batch size 128, requiring approximately 3 hours. The random seed is fixed at 42 for reproducibility.
+
+\subsection{Temporal Post-Processing}
+
+Frame-level sigmoid outputs are converted to temporal event predictions through a three-stage pipeline. Firstly, per-class optimized thresholds (determined on the validation partition) are applied to binarize predictions. Secondly, a median filter with window size $w=7$ is applied independently per class along the temporal axis to suppress isolated false positives, followed by gap merging that fills gaps of $\leq 5$ frames between same-class events—reflecting the clinical expectation that pathological findings persist over contiguous frame sequences in VCE data. Thirdly, events shorter than 3 frames are removed, and the remaining predictions are formatted into the competition JSON schema.
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\linewidth]{ICPR_RARE_VISION_Challenge_2026_Architecture_Diagram__4__page-0001.jpg}
+    \caption{Overview of the proposed Differential BiomedCLIP pipeline. \textbf{Stage 1:} VCE frames are processed through a sqrt-frequency sampler and augmented with mixup ($\alpha=0.3$) and geometric/photometric transforms. \textbf{Stage 2:} The differential ViT backbone (Patch16, 12 blocks, 768-d) extracts 512-d image features, which are routed to both an excitation-gated classification head (17 classes) and a contrastive alignment module against PubMedBERT-encoded clinical text prompts. EMA ($\beta=0.999$) maintains a smoothed parameter copy. \textbf{Stage 3:} Asymmetric focal loss and contrastive BCE loss are combined as $\mathcal{L}_{\text{cls}} + 0.4\mathcal{L}_{\text{con}}$. \textbf{Stage 4:} Per-class optimized thresholds, temporal median smoothing ($w=7$), and gap merging ($\leq 5$ frames) convert frame-level posteriors into the competition event JSON.}
+    \label{fig:pipeline}
+\end{figure}
+
+
+\section{Results}\label{sec3}
+
+\subsection{Competition Metrics}
+
+The temporal mAP values reported below were computed using the official RARE-VISION evaluation web application and sanity checker, without any modification.
+
+\vspace{2mm}
+\noindent Overall mAP @ 0.5 --- \textbf{0.2456}
+
+\noindent Overall mAP @ 0.95 --- \textbf{0.2353}
+
+\vspace{2mm}
+
+\begin{table}[htbp]
+\centering
+\caption{Per-video temporal mAP on the RARE-VISION test set (3 NaviCam examinations).}
+\label{tab:per_video}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Video ID} & \textbf{Frames} & \textbf{mAP@0.5} & \textbf{mAP@0.95} \\
+\midrule
+ukdd\_navi\_00051 & 44,878 & 0.2371 & 0.2353 \\
+ukdd\_navi\_00068 & 53,220 & 0.1808 & 0.1765 \\
+ukdd\_navi\_00076 & 62,927 & 0.3189 & 0.2941 \\
+\midrule
+\textbf{Average} & \textbf{161,025} & \textbf{0.2456} & \textbf{0.2353} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Validation Performance}
+
+On the validation partition (10 videos, $\sim$80,399 frames), the best checkpoint (epoch 4) achieved a frame-level macro-averaged AP of 0.2528. Table~\ref{tab:val_perclass} presents the per-class breakdown. Anatomical regions with sufficient temporal continuity—namely stomach (AP=0.849), small intestine (AP=0.969), and colon (AP=0.996)—were classified with high precision. In contrast, rare pathological labels with extremely limited training support—namely active bleeding (150 frames), erythema (232 frames), and hematin (2,565 frames)—exhibited AP values below 0.03, reflecting the fundamental difficulty of learning discriminative representations from fewer than 0.05\% of the training distribution.
+
+\begin{table}[htbp]
+\centering
+\caption{Per-class validation metrics at the best checkpoint (epoch 4). ``Sup'' denotes the number of positive frames in the validation set.}
+\label{tab:val_perclass}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Label} & \textbf{AP} & \textbf{AUC} & \textbf{F1} & \textbf{Prec} & \textbf{Rec} & \textbf{Sup} \\
+\midrule
+mouth & 0.244 & 0.991 & 0.267 & 0.261 & 0.273 & 22 \\
+esophagus & 0.332 & 0.938 & 0.358 & 0.324 & 0.400 & 30 \\
+stomach & 0.849 & 0.981 & 0.742 & 0.678 & 0.819 & 3,740 \\
+small intestine & 0.969 & 0.989 & 0.847 & 0.743 & 0.986 & 20,608 \\
+colon & 0.996 & 0.991 & 0.967 & 0.970 & 0.964 & 55,999 \\
+z-line & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 0 \\
+pylorus & 0.006 & 0.593 & 0.069 & 0.077 & 0.063 & 16 \\
+ileocecal valve & 0.001 & 0.322 & 0.014 & 0.020 & 0.010 & 98 \\
+active bleeding & 0.002 & 0.522 & 0.000 & 0.000 & 0.000 & 100 \\
+angiectasia & 0.028 & 0.932 & 0.011 & 0.008 & 0.020 & 51 \\
+blood & 0.678 & 0.940 & 0.386 & 0.253 & 0.813 & 2,664 \\
+erosion & 0.141 & 0.829 & 0.233 & 0.201 & 0.276 & 1,025 \\
+erythema & 0.001 & 0.537 & 0.000 & 0.000 & 0.000 & 27 \\
+hematin & 0.001 & 0.463 & 0.000 & 0.000 & 0.000 & 63 \\
+lymphangioectasis & 0.011 & 0.696 & 0.029 & 0.017 & 0.084 & 119 \\
+polyp & 0.026 & 0.729 & 0.007 & 0.018 & 0.004 & 928 \\
+ulcer & 0.012 & 0.468 & 0.000 & 0.000 & 0.000 & 954 \\
+\midrule
+\textbf{Macro avg.} & \textbf{0.253} & \textbf{0.701} & \textbf{0.231} & \textbf{0.210} & \textbf{0.277} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Training Dynamics}
+
+The training loss decreased monotonically from 0.488 (epoch 1) to 0.176 (epoch 5), while validation loss rose moderately from 0.203 to 0.411 over the same interval. This controlled divergence (a factor of $\sim$2.3$\times$ at epoch 5) stands in contrast to preliminary experiments without regularization, where the validation loss exceeded the training loss by a factor exceeding 15$\times$ within 8 epochs. The OneCycleLR schedule decayed the learning rate from $3\times10^{-4}$ to $9\times10^{-8}$ over the 5-epoch budget. Validation mAP improved at every epoch (0.235, 0.239, 0.244, 0.253, 0.248), with the best checkpoint occurring at epoch 4.
+
+\subsection{Test Inference}
+
+Inference on the three NaviCam test videos (161,025 frames total) completed in 517.3 seconds (8.6 minutes) on a single NVIDIA RTX PRO 6000 GPU. Per-video inference times were 161.9s, 167.1s, and 188.3s for the 44,878-, 53,220-, and 62,927-frame videos respectively. The per-class optimized thresholds used for binarization ranged from 0.07 (hematin) to 0.83 (blood, angiectasia), reflecting the model's calibration differences across the label frequency spectrum.
+
+
+\section{Discussion}\label{sec4}
+
+The narrow gap between mAP@0.5 (0.2456) and mAP@0.95 (0.2353) across the test set indicates that the temporal boundaries of predicted events are well-localized when events are detected. This may be attributed to the median-filter smoothing and gap merging, which consolidate fragmented predictions into coherent temporal segments aligned with the continuous nature of capsule transit through the GI tract.
+
+The per-video variance (mAP@0.5 ranging from 0.181 to 0.319) warrants examination. The strongest performance on \texttt{ukdd\_navi\_00076} (0.319) may correlate with the pathological distribution in that particular examination. Conversely, the weaker performance on \texttt{ukdd\_navi\_00068} (0.181) may reflect a higher proportion of ambiguous or overlapping pathological findings. Additionally, the test videos were acquired using the NaviCam system (480$\times$480 pixels) whereas the majority of training data originated from Olympus Endocapsule (336$\times$336 pixels) and PillCam (512$\times$512 pixels) systems, introducing a domain shift in image resolution, color rendition, and field-of-view characteristics.
+
+The principal limitation remains the rare pathological classes. Labels with fewer than 200 training frames (namely z-line, active bleeding, erythema, hematin) consistently exhibited AP below 0.01 despite sqrt-frequency oversampling and asymmetric focal loss. Morphologically, these conditions present as subtle mucosal changes—for instance, angiectasia manifests as small, flat vascular ectasias that are visually indistinguishable from normal villi at low magnification, and erythema appears as diffuse reddening that overlaps substantially with the normal color variation of gastric and intestinal mucosa. The scarcity of training examples compounds this inherent visual ambiguity, as the model cannot build robust feature representations from the limited available signal. Future work may incorporate temporal modeling (namely recurrent or attention-based sequence modules) to leverage the sequential frame context, as pathological events in VCE data are characterized by temporal persistence and gradual morphological transitions that frame-level classifiers cannot exploit.
+
+
+\section{Summary}\label{sec5}
+
+Team --- utilized a Differential Attention-Augmented BiomedCLIP model, wherein the standard multi-head self-attention in all 12 ViT blocks was replaced with differential attention to suppress attention noise and amplify clinically meaningful visual features. A multi-level class imbalance strategy comprising sqrt-frequency weighted sampling, asymmetric focal loss ($\gamma_- = 4$), label smoothing, mixup augmentation, and per-class threshold optimization was utilized to handle class imbalance in the dataset. The narrow gap between mAP@0.5 and mAP@0.95 (0.0103 absolute difference) indicates precise temporal boundary localization attributable to the median-filter smoothing and gap-merging post-processing. The team achieved an overall mAP@0.5 of \textbf{0.2456}, and overall mAP@0.95 of \textbf{0.2353}.
+
+\section{Acknowledgments}\label{sec6}
+
+As participants in the ICPR 2026 RARE-VISION Competition, we fully comply with the competition's rules as outlined in \cite{Lawniczak2025}. Our AI model development is based exclusively on the datasets provided in the competition. BiomedCLIP \cite{Zhang2023biomedclip}, which is pretrained on publicly available PubMed Central data, was used as the foundation model as permitted by the competition rules. The mAP values are reported using the test dataset and sanity checker released in the competition. All code, model weights, and training logs (including loss curves and seed information) are available in the public GitHub repository.
+
+\bibliographystyle{unsrtnat}
+\bibliography{sample}
+
+
+\end{document}
