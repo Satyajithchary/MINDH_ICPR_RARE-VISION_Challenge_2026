@@ -56,9 +56,7 @@ class Config:
 
     # ── RESUME ─────────────────────────────────────────────────────────────
     # Set this to your checkpoint path to continue training.
-    # Leave None to train from scratch.
-    RESUME_FROM = None  # e.g. "/path/to/checkpoints/best_model.pth"
-    # When resuming: set EPOCHS to your NEW total (e.g. was 5, now want 10 → set 10)
+    RESUME_FROM = None 
 
     # ── Paths ──
     DATASET_ROOT    = "/media/data/Galar_Dataset/Galar_Dataset"
@@ -944,7 +942,7 @@ def run_test_pipeline():
     logger.info(f"  Total: {tot:.1f}s ({tot/60:.1f}min)\n{'='*60}")
 
 # ============================================================================
-# ENTRY
+# MAIN FUNCTION
 # ============================================================================
 def main():
     seed_everything(Config.SEED); Config.apply_mode()
