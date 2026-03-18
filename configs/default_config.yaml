@@ -1,0 +1,69 @@
+# ============================================================================
+# ICPR 2026 RARE-VISION — Differential BiomedCLIP v3.1 Configuration
+# ============================================================================
+# This file documents the exact hyperparameters used for the submitted results.
+# To use: modify the Config class in rare_vision_pipeline_v3_1.py accordingly.
+# ============================================================================
+
+mode: "train"  # smoke | train | test
+
+# --- Paths (update to your local setup) ---
+dataset_root: "/media/data/Galar_Dataset/Galar_Dataset"
+labels_dir: "${dataset_root}/20251215_Labels_Updated"
+labels_dir_orig: "${dataset_root}/Galar_labels_and_metadata/Labels"
+test_data_root: "/path/to/Testdata_ICPR_2026_RARE_Challenge"
+output_dir: "./rare_vision_output_v3"
+
+# --- Model ---
+model_name: "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
+num_classes: 17
+image_size: 224
+lambda_init: 0.8           # Differential attention λ initialization
+eb_reduction: 16           # Excitation block channel reduction ratio
+
+# --- Training ---
+batch_size: 128
+num_workers: 8
+epochs: 5
+lr: 3.0e-4                 # Head learning rate (OneCycleLR max_lr)
+backbone_lr_mult: 0.3      # Backbone LR = lr × this
+weight_decay: 5.0e-4
+grad_accum_steps: 1
+early_stop_patience: 15
+use_amp: true
+
+# --- Anti-Overfitting ---
+label_smoothing: 0.05
+dropout: 0.4
+use_mixup: true
+mixup_alpha: 0.3
+use_ema: true
+ema_decay: 0.999
+use_strong_aug: true
+
+# --- Class Imbalance ---
+use_focal_loss: true
+focal_gamma_pos: 1
+focal_gamma_neg: 4
+use_contrastive: true
+contrastive_weight: 0.4
+cls_weight: 1.0
+use_class_balanced_sampling: true
+
+# --- Temporal Post-Processing ---
+min_event_length: 3
+smooth_window: 7
+confidence_thresh: 0.5
+rare_class_thresh: 0.2     # Default threshold for zero-support classes
+merge_gap: 5               # Fill gaps ≤ this many frames
+
+# --- Data Sampling ---
+frame_sample_rate: 5
+val_sample_rate: 5
+val_split: 0.15
+
+# --- Reproducibility ---
+seed: 42
+
+# --- Resume (set to checkpoint path to continue training) ---
+resume_from: null  # e.g., "./checkpoints/best_model.pth"
