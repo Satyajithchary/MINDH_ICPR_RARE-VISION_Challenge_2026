@@ -82,8 +82,9 @@ This cancels common-mode attention noise, amplifying signal from diagnostically 
 ├── assets/
 │   └── architecture_diagram.png       # Pipeline architecture figure
 └── report/
-    ├── report.tex                     # Competition report (LaTeX)
+    ├── main.tex                     # Competition report (LaTeX)
     └── sample.bib                     # References
+    └── MINDH_ICPR_2026_RARE_VISION_Challenge_Report.pdf
 ```
 
 ---
